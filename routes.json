@@ -1,0 +1,17 @@
+{
+    "/home": "static/home",
+    "/about": "static/about",
+    "/contact": "static/contact",
+    "/status": "static/test",
+    "/login": "/auth/login",
+    "/logout": "/auth/logout",
+    "/register": "/auth/register",
+    "/forgot": "/auth/forgot-gen",
+    "/verify-code": "/auth/forgot-val",
+    "/verify": "/auth/verify",
+    "/profile": "/auth/profile",
+    "/orders": "/app/orders",
+    "/users": "/app/users",
+    "/products": "/app/products",
+    "/order_items": "/app/order_items"
+}
