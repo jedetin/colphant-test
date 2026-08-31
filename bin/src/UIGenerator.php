@@ -820,15 +820,30 @@ final class UIGenerator extends CPGenerator
             }
 
             async function apiRequest(action, data = {}, method = "POST") {
+                console.log("apiRequest-action", action)
+                console.log("apiRequest-data", data)
+                console.log("apiRequest-method", method)
                 const params = new URLSearchParams();
 
                 params.set("action", action);
 
-                if (data.id !== undefined && data.id !== null && data.id !== "") {
-                    params.set("id", data.id);
-                }
+                const pk = CONFIG.primaryKey;
 
-                const url = `${CONFIG.apiUrl}?${params.toString()}`;
+
+                // if (
+                //     data[CONFIG.primaryKey] !== undefined &&
+                //     data[CONFIG.primaryKey] !== null &&
+                //     data[CONFIG.primaryKey] !== ""
+                // ) {
+                //     console.error("apiRequest wrong - data[pk]")
+                //     console.log("apiRequest-action", CONFIG.primaryKey)
+                //     console.log("apiRequest-data", data[pk])
+
+                //     params.set(data[CONFIG.primaryKey], data[pk]);
+                // }
+                if (data[pk] !== undefined && data[pk] !== null && data[pk] !== "") {
+                    params.set(CONFIG.primaryKey, data[pk]);
+                }
 
                 const options = {
                     method,
@@ -840,14 +855,18 @@ final class UIGenerator extends CPGenerator
                 if (method === "POST") {
                     options.headers["Content-Type"] = "application/json";
 
-                    options.body = JSON.stringify(
-                        Object.fromEntries(
-                            Object.entries(data).filter(([key]) => key !== "id")
-                        )
-                    );
+                    const body = {
+                        ...data
+                    };
+                    delete body[pk];
+
+                    options.body = JSON.stringify(body);
                 }
 
-                const response = await fetch(url, options);
+                const response = await fetch(
+                    `${CONFIG.apiUrl}?${params.toString()}`,
+                    options
+                );
 
                 if (!response.ok) {
                     throw new Error(`HTTP ${response.status}`);
@@ -861,7 +880,6 @@ final class UIGenerator extends CPGenerator
 
                 return json;
             }
-
             async function refreshTable() {
                 try {
                     const json = await apiRequest("list", {}, "GET");
@@ -887,7 +905,7 @@ final class UIGenerator extends CPGenerator
             async function editRecord(id) {
                 try {
                     const json = await apiRequest("read", {
-                        id
+                        [CONFIG.primaryKey]: id
                     }, "GET");
                     if (!json.data) {
                         showApiError("Record was not found.");
@@ -953,7 +971,7 @@ final class UIGenerator extends CPGenerator
             async function viewRecord(id) {
                 try {
                     const json = await apiRequest("read", {
-                        id
+                        [CONFIG.primaryKey]: id
                     }, "GET");
                     const record = json.data;
 
@@ -1002,7 +1020,7 @@ final class UIGenerator extends CPGenerator
                 try {
                     setButtonLoading(button, true);
                     const json = await apiRequest("delete", {
-                        id: deleteId
+                        [CONFIG.primaryKey]: deleteId
                     });
 
                     if (json.success === false) {
@@ -1071,6 +1089,7 @@ final class UIGenerator extends CPGenerator
             }
 
             function showApiError(message) {
+                showToast('Failed: {message}', 'danger');
                 console.error(message);
                 alert(message);
             }
@@ -1119,16 +1138,8 @@ final class UIGenerator extends CPGenerator
     public function generate(): CPGeneratorResult
     {
 
-
-        // $this->log('Reading spec.json');
-
-        // $spec = $this->context->spec();
-
-        // generate model classes
-
-
         $specPath = $_GET['spec'] ?? __DIR__ . '\..\spec.json';
-        // $specPath = $opts['spec'] ?? __DIR__ . '\..\spec.json';
+
         $outputDir   = $opts['out']  ?? $_SERVER['DOCUMENT_ROOT'] . '\view\app';
 
         if (!is_string($specPath) || $specPath === '') {
