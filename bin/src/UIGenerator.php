@@ -9,6 +9,79 @@ final class UIGenerator extends CPGenerator
         return 'model';
     }
 
+    function addRoutes(array $tableNames): array
+    {
+        $routesFile = $_SERVER['DOCUMENT_ROOT'] . '/routes.json';
+
+        $routes = [];
+
+        if (is_file($routesFile)) {
+            $routes = json_decode(
+                (string) file_get_contents($routesFile),
+                true
+            ) ?: [];
+        }
+
+        foreach ($tableNames as $tableName) {
+            $routes['/' . $tableName] = '/app/' . $tableName;
+        }
+
+        file_put_contents(
+            $routesFile,
+            json_encode(
+                $routes,
+                JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES
+            ) . PHP_EOL
+        );
+
+        return $routes;
+    }
+
+    function updateHeaderNavbar(array $routes): void
+    {
+        $headerFile = $_SERVER['DOCUMENT_ROOT'] . '/view/include/header.php';
+
+        if (!is_file($headerFile)) {
+            return;
+        }
+
+        $header = file_get_contents($headerFile);
+
+        $items = '';
+
+        foreach ($routes as $route => $target) {
+            $name = trim($route, '/');
+            $name = str_replace(['-', '_'], ' ', $name);
+            $name = ucwords($name);
+
+            $items .= sprintf(
+                '                <li><a class="dropdown-item" href="%s">%s</a></li>' . PHP_EOL,
+                htmlspecialchars($target, ENT_QUOTES, 'UTF-8'),
+                htmlspecialchars($name, ENT_QUOTES, 'UTF-8')
+            );
+        }
+
+        $dropdown = <<<HTML
+                <li class="nav-item dropdown">
+                    <a class="nav-link dropdown-toggle" href="#" role="button"
+                        data-bs-toggle="dropdown" aria-expanded="false">
+                        Pages
+                    </a>
+                    <ul class="dropdown-menu">
+                        $items </ul>
+                </li>
+                HTML;
+
+        // Replace the generated marker.
+        $marker = '<!-- CRUD_ROUTES_DROPDOWN -->';
+
+        if (str_contains($header, $marker)) {
+            $header = str_replace($marker, $dropdown, $header);
+        }
+
+        file_put_contents($headerFile, $header);
+    }
+
     function generateTablePage(string $tableName, array $table, string $outputDir): void
     {
 
@@ -1184,13 +1257,40 @@ final class UIGenerator extends CPGenerator
 
         // file_put_contents($outputFile, $html);
 
+        $tableNames = [];
+        echo "call GenerateTablePage";
         foreach ($spec as $tableName => $table) {
-            if (!is_string($tableName) || !is_array($table)) {
-                continue;
+            $this->generateTablePage($tableName, $table, $outputDir);
+            $tableNames[] = $tableName;
+        }
+
+        echo ("Running addRoutes");
+        print_r($tableNames);
+
+        try {
+            $routes = $this->addRoutes($tableNames);
+
+            if (empty($routes)) {
+                throw new Exception('Failed to add routes');
             }
 
-            $this->generateTablePage($tableName, $table, $outputDir);
+            $this->updateHeaderNavbar(
+                array_combine(
+                    array_map(
+                        fn($table) => '/' . $table,
+                        $tableNames
+                    ),
+                    array_map(
+                        fn($table) => $table,
+                        $tableNames
+                    )
+                )
+            );
+            echo 'Success';
+        } catch (Throwable $e) {
+            echo 'Failed: ' . $e->getMessage();
         }
+
 
         echo "Generated " . count($spec) . " CRUD page(s).";
 
