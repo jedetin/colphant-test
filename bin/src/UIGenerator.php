@@ -407,7 +407,7 @@ final class UIGenerator extends CPGenerator
             let records = [];
             let filteredRecords = [];
             let currentPage = 1;
-            let pageSize = 5;
+            let pageSize = 25;
             let sortKey = "";
             let sortDirection = "asc";
             let deleteId = null;
@@ -601,46 +601,43 @@ final class UIGenerator extends CPGenerator
             }
 
             function renderTable() {
-                const totalPages = Math.max(1, Math.ceil(filteredRecords.length / pageSize));
-                if (currentPage > totalPages) currentPage = totalPages;
-
-                const start = (currentPage - 1) * pageSize;
-                const pageRows = filteredRecords.slice(start, start + pageSize);
+                const pageRows = records;
                 const tbody = document.getElementById("tableBody");
 
                 tbody.innerHTML = pageRows.length ?
                     pageRows.map(record => `
-                            <tr>
-                                ${visibleColumns.map(column => `<td>${renderCell(record, column)}</td>`).join("")}
-                                <td class="text-end">
-                                    <div class="btn-group btn-group-sm" role="group" aria-label="Actions">
-                                        <button class="btn btn-outline-secondary btn-view" title="View"
-                                                data-id="${escapeHTML(record[CONFIG.primaryKey])}">
-                                            <i class="fa-solid fa-eye"></i>
-                                        </button>
+            <tr>
+                ${visibleColumns.map(column => `<td>${renderCell(record, column)}</td>`).join("")}
+                <td class="text-end">
+                    <div class="btn-group btn-group-sm" role="group" aria-label="Actions">
+                        <button class="btn btn-outline-secondary btn-view" title="View"
+                                data-id="${escapeHTML(record[CONFIG.primaryKey])}">
+                            <i class="fa-solid fa-eye"></i>
+                        </button>
 
-                                        <button class="btn btn-outline-primary btn-edit" title="Update"
-                                                data-id="${escapeHTML(record[CONFIG.primaryKey])}">
-                                            <i class="fa-solid fa-pen"></i>
-                                        </button>
+                        <button class="btn btn-outline-primary btn-edit" title="Update"
+                                data-id="${escapeHTML(record[CONFIG.primaryKey])}">
+                            <i class="fa-solid fa-pen"></i>
+                        </button>
 
-                                        <button class="btn btn-outline-danger btn-delete" title="Delete"
-                                                data-id="${escapeHTML(record[CONFIG.primaryKey])}">
-                                            <i class="fa-solid fa-trash"></i>
-                                        </button>
-                                    </div>
-                                </td>
-                            </tr>
-                        `).join("") :
+                        <button class="btn btn-outline-danger btn-delete" title="Delete"
+                                data-id="${escapeHTML(record[CONFIG.primaryKey])}">
+                            <i class="fa-solid fa-trash"></i>
+                        </button>
+                    </div>
+                </td>
+            </tr>
+        `).join("") :
                     `
-                            <tr>
-                                <td colspan="${visibleColumns.length + 1}" class="text-center py-5">
-                                    <i class="fa-solid fa-inbox text-muted fs-2 mb-3"></i>
-                                    <div class="fw-semibold">No records found</div>
-                                    <div class="small text-muted">Try changing your filters.</div>
-                                </td>
-                            </tr>
-                        `;
+            <tr>
+                <td colspan="${visibleColumns.length + 1}" class="text-center py-5">
+                    <i class="fa-solid fa-inbox text-muted fs-2 mb-3"></i>
+                    <div class="fw-semibold">No records found</div>
+                    <div class="small text-muted">No records available.</div>
+                </td>
+            </tr>
+        `;
+
                 tbody.querySelectorAll(".btn-view").forEach(button => {
                     button.addEventListener("click", () => {
                         viewRecord(button.dataset.id);
@@ -658,15 +655,27 @@ final class UIGenerator extends CPGenerator
                         deleteRecord(button.dataset.id);
                     });
                 });
-                document.getElementById("recordCount").textContent = filteredRecords.length;
-                document.getElementById("totalRecords").textContent = filteredRecords.length;
-                document.getElementById("showingFrom").textContent = filteredRecords.length ? start + 1 : 0;
-                document.getElementById("showingTo").textContent = Math.min(start + pageSize, filteredRecords.length);
-                document.getElementById("pageInfo").textContent = `Page ${currentPage} of ${totalPages}`;
+
+                const showingFrom = totalRecords ?
+                    ((currentPage - 1) * pageSize) + 1 :
+                    0;
+
+                const showingTo = Math.min(
+                    ((currentPage - 1) * pageSize) + pageRows.length,
+                    totalRecords
+                );
+
+                document.getElementById("recordCount").textContent = totalRecords;
+                document.getElementById("totalRecords").textContent = totalRecords;
+                document.getElementById("showingFrom").textContent = showingFrom;
+                document.getElementById("showingTo").textContent = showingTo;
+                document.getElementById("pageInfo").textContent =
+                    `Page ${currentPage} of ${totalPages}`;
 
                 renderPagination(totalPages);
                 updateSortIcons();
             }
+
 
             function renderPagination(totalPages) {
                 const pagination = document.getElementById("pagination");
@@ -697,13 +706,16 @@ final class UIGenerator extends CPGenerator
                 pagination.innerHTML = html;
             }
 
-            function goToPage(page) {
-                const totalPages = Math.max(1, Math.ceil(filteredRecords.length / pageSize));
-                if (page < 1 || page > totalPages) return;
+            async function goToPage(page) {
+                if (page < 1 || page > totalPages || page === currentPage) {
+                    return;
+                }
 
                 currentPage = page;
-                renderTable();
+
+                await refreshTable();
             }
+
 
             function buildField(column, mode) {
                 const field = getField(column);
@@ -914,10 +926,22 @@ final class UIGenerator extends CPGenerator
 
                 //     params.set(data[CONFIG.primaryKey], data[pk]);
                 // }
+                // Primary key is handled separately because it is part of the API contract.
                 if (data[pk] !== undefined && data[pk] !== null && data[pk] !== "") {
                     params.set(CONFIG.primaryKey, data[pk]);
                 }
 
+                // Add non-PK GET parameters such as page, limit, search, etc.
+                for (const [key, value] of Object.entries(data)) {
+                    if (
+                        key !== pk &&
+                        value !== undefined &&
+                        value !== null &&
+                        value !== ""
+                    ) {
+                        params.set(key, value);
+                    }
+                }
                 const options = {
                     method,
                     headers: {
@@ -955,11 +979,19 @@ final class UIGenerator extends CPGenerator
             }
             async function refreshTable() {
                 try {
-                    const json = await apiRequest("list", {}, "GET");
+                    const json = await apiRequest("list", {
+                        page: currentPage,
+                        limit: pageSize
+                    }, "GET");
 
                     records = Array.isArray(json.data) ? json.data : [];
 
-                    applyFilters();
+                    totalRecords = Number(json.total ?? 0);
+                    totalPages = Number(json.pages ?? 1);
+                    currentPage = Number(json.page ?? currentPage);
+
+                    renderTable();
+
                 } catch (error) {
                     console.error("Load failed:", error);
                     showApiError(`Unable to load ${CONFIG.title.toLowerCase()} records.`);

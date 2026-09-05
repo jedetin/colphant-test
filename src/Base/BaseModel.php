@@ -19,29 +19,61 @@ class BaseModel
         }
     }
 
-    protected function findById($id)
+    protected function findById($id, ?string $key = null, ?string $keyType = null): ?array
     {
-        $stmt = $this->database->prepare("SELECT * FROM {$this->table} WHERE {$this->primaryKey}  = ? LIMIT 1");
-        $stmt->bind_param($this->primaryKeyType, $id);
+        // [1] Falls back to model's primaryKey if no override given
+        $col  = $key     ?? $this->primaryKey;
+        $type = $keyType ?? $this->primaryKeyType;
+
+        $stmt = $this->database->prepare(
+            "SELECT * FROM {$this->table} WHERE `{$col}` = ? LIMIT 1"
+        );
+        $stmt->bind_param($type, $id);
         $stmt->execute();
-        return $stmt->get_result()->fetch_assoc();
+        $result = $stmt->get_result()->fetch_assoc();
+        $stmt->close();
+        return $result ?: null; // explicit null instead of false
     }
 
-    public function findByName($value, $column)
+    public function findByName(mixed $value, string $column, ?int $limit = null): array
     {
-        // [Uniformization] Allowing search by any key dynamically
-        $query = "SELECT * FROM {$this->table} WHERE `{$column}` = ?";
-        $stmt = $this->database->prepare($query);
-        $stmt->bind_param($this->primaryKeyType, $value);
-        $stmt->execute();
+        // Security: column must be in allowedColumns if the list is defined
+        if (!empty($this->allowedColumns) && !in_array($column, $this->allowedColumns, true)) {
+            throw new \InvalidArgumentException("Column '{$column}' is not queryable.");
+        }
 
-        return $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+        // [2] Infer bind type from value — not from primaryKeyType (that was a bug)
+        $type  = is_int($value) ? 'i' : (is_float($value) ? 'd' : 's');
+
+        // [2] Optional limit — default null means no cap (caller's choice)
+        $limitSql = $limit ? " LIMIT {$limit}" : '';
+
+        $stmt = $this->database->prepare(
+            "SELECT * FROM {$this->table} WHERE `{$column}` = ?{$limitSql}"
+        );
+        $stmt->bind_param($type, $value);
+        $stmt->execute();
+        $rows = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+        $stmt->close();
+        return $rows;
     }
 
-    protected function findAll()
+    protected function findAll(int $limit = 25, int $offset = 0): array
     {
-        $result = $this->database->query("SELECT * FROM {$this->table}");
-        return $result->fetch_all(MYSQLI_ASSOC);
+        // [3] Sane default: 25 rows. Caller passes limit/offset for pagination.
+        // Passing limit=0 is treated as "no limit" — use deliberately, not by default.
+        if ($limit === 0) {
+            $stmt = $this->database->prepare("SELECT * FROM {$this->table}");
+        } else {
+            $stmt = $this->database->prepare(
+                "SELECT * FROM {$this->table} LIMIT ? OFFSET ?"
+            );
+            $stmt->bind_param('ii', $limit, $offset);
+        }
+        $stmt->execute();
+        $rows = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+        $stmt->close();
+        return $rows;
     }
 
     protected function create($data)
@@ -90,5 +122,17 @@ class BaseModel
         $stmt = $this->database->prepare("DELETE FROM {$this->table} WHERE {$this->primaryKey} = ?");
         $stmt->bind_param($this->primaryKeyType, $id);
         return $stmt->execute();
+    }
+
+    protected function countAll(): int
+    {
+        $stmt = $this->database->prepare(
+            "SELECT COUNT(*) FROM {$this->table}"
+        );
+        $stmt->execute();
+        $stmt->bind_result($count);
+        $stmt->fetch();
+        $stmt->close();
+        return (int) $count;
     }
 }

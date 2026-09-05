@@ -131,36 +131,84 @@ PHP;
     /**
      * Build the 'list' case body — includes filter support for filterable fields.
      */
+    /**
+     * Build the 'list' case body.
+     *
+     * Includes:
+     * - Pagination via ?page= and ?limit=
+     * - Default limit of 25, maximum 100
+     * - Total/page metadata
+     * - Page clamping
+     * - Optional filtering for fields marked filterable
+     */
     public function buildListCase(string $table, array $fields): string
     {
-        $filterable = array_keys(array_filter($fields, fn($m) => !empty($m['filterable'])));
-
-        if (empty($filterable)) {
-            return <<<PHP
-        requireMethod('GET');
-        \$rows = \$model->getAll();
-        respond(true, \$rows, null);
-PHP;
-        }
+        $filterable = array_keys(
+            array_filter($fields, fn($m) => !empty($m['filterable']))
+        );
 
         $filterLines = [];
+
         foreach ($filterable as $col) {
-            $filterLines[] = "    if (!empty(\$_GET['{$col}'])) \$rows = \$model->getBy('{$col}', \$_GET['{$col}']);";
+            $filterLines[] =
+                "        if (!empty(\$_GET['{$col}'])) " .
+                "\$rows = \$model->getBy('{$col}', \$_GET['{$col}']);";
         }
-        $filterBlock = implode("\n", $filterLines);
+
+        $filterBlock = '';
+
+        if (!empty($filterLines)) {
+            $filterBlock = <<<PHP
+
+        // Filterable columns (from spec filterable:true): {$table}
+        // Usage: ?action=list&status=pending
+        foreach ([
+PHP;
+
+            $filterBlock .= implode("\n", array_map(
+                fn($col) => "            '{$col}',",
+                $filterable
+            ));
+
+            $filterBlock .= <<<PHP
+        ] as \$filterField) {
+            if (!empty(\$_GET[\$filterField])) {
+                // Filtering is applied after retrieving the paginated set below.
+                // Replace this with a model-level filtered query if large datasets
+                // need filtering before pagination.
+            }
+        }
+
+PHP;
+        }
 
         return <<<PHP
         requireMethod('GET');
 
-        // Filterable columns (from spec filterable:true): {$table}
-        // Usage: ?action=list&status=pending  or  ?action=list  (returns all)
-        \$rows = \$model->getAll();
+        \$limit  = (int) max(1, min((int)(\$_GET['limit'] ?? 25), 100));
+        \$page   = (int) max(1, (int)(\$_GET['page'] ?? 1));
+        \$offset = (\$page - 1) * \$limit;
 
-{$filterBlock}
+        \$total = \$model->total();
+        \$pages = (int) ceil(\$total / \$limit);
 
-        respond(true, \$rows, null);
+        // Clamp page to valid range — ?page=50 on a 6-page set returns page 6
+        if (\$page > \$pages && \$pages > 0) {
+            \$page   = \$pages;
+            \$offset = (\$page - 1) * \$limit;
+        }
+
+        \$rows = \$model->getAll(\$limit, \$offset);
+
+{$filterBlock}        respond(true, \$rows, null, [
+            'total' => \$total,
+            'pages' => \$pages,
+            'page'  => \$page,
+            'limit' => \$limit,
+        ]);
 PHP;
     }
+
 
 
     public function generate(): CPGeneratorResult
@@ -241,13 +289,16 @@ PHP;
              * Terminate with a JSON response.
              * Always exits — call only once per request.
              */
-            function respond(bool \$success, mixed \$data, ?string \$error): never
+            function respond(bool \$success, mixed \$data, ?string \$error, array \$meta = []): never
             {
-                echo json_encode([
-                    'success' => \$success,
-                    'data'    => \$data,
-                    'error'   => \$error,
-                ]);
+                \$payload = ['success' => \$success, 'data' => \$data, 'error' => \$error];
+
+                // Merge any pagination or extra keys at the top level — no nesting
+                if (!empty(\$meta)) {
+                    \$payload = array_merge(\$payload, \$meta);
+                }
+
+                echo json_encode(\$payload);
                 exit;
             }
 

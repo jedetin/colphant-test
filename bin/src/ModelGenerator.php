@@ -207,14 +207,19 @@ class {$className} extends BaseModel
         return \$this->findById(\$id);
     }
 
-    public function getAll(): array
+    public function getAll(int \$limit = 25, int \$offset = 0): array
     {
-        return \$this->findAll();
+        return \$this->findAll(\$limit, \$offset);
     }
 
-    public function getBy(string \$column, mixed \$value): array
+    public function getBy(string \$column, mixed \$value, ?int \$limit = null): array
     {
-        return \$this->findByColumn(\$value, \$column);
+        return \$this->findByColumn(\$value, \$column, \$limit);
+    }
+
+    public function total(): int
+    {
+        return \$this->countAll();
     }
 
     public function add(array \$data): int
