@@ -246,6 +246,38 @@ final class UIGenerator extends CPGenerator
             <div class="card border-0 shadow-sm mb-4">
                 <div class="card-body">
                     <div class="row g-3 align-items-end" id="filterRow">
+                        <div class="row g-2 align-items-end mb-3">
+                            <div class="col-md-4">
+                                <label for="searchInput" class="form-label">Search</label>
+                                <input type="text"
+                                    class="form-control"
+                                    id="searchInput"
+                                    placeholder="Search...">
+                            </div>
+
+                            <div class="col-md-3">
+                                <label for="searchColumn" class="form-label">Column</label>
+                                <select class="form-select" id="searchColumn">
+                                    <option value="">All searchable columns</option>
+                                    <!-- generated options -->
+                                </select>
+                            </div>
+
+                            <div class="col-auto">
+                                <button type="button"
+                                    class="btn btn-primary"
+                                    onclick="performSearch()">
+                                    <i class="fa-solid fa-magnifying-glass"></i>
+                                    Search
+                                </button>
+
+                                <button type="button"
+                                    class="btn btn-outline-secondary"
+                                    onclick="clearSearch()">
+                                    Clear
+                                </button>
+                            </div>
+                        </div>
                         <?php if ($searchableFields): ?>
                             <div class="col-12 col-lg-5">
                                 <label for="searchInput" class="form-label small fw-semibold">Search</label>
@@ -404,6 +436,10 @@ final class UIGenerator extends CPGenerator
         <script>
             const CONFIG = <?= jsValue($jsConfig) ?>;
 
+            let totalPages = 1;
+            let searchQuery = "";
+            let searchColumn = "";
+            let searchMode = false;
             let records = [];
             let filteredRecords = [];
             let currentPage = 1;
@@ -539,27 +575,27 @@ final class UIGenerator extends CPGenerator
                 return filters;
             }
 
-            function applyFilters() {
-                const search = (document.getElementById("searchInput")?.value || "").toLowerCase().trim();
-                const filters = collectFilters();
+            // function applyFilters() {
+            //     const search = (document.getElementById("searchInput")?.value || "").toLowerCase().trim();
+            //     const filters = collectFilters();
 
-                filteredRecords = records.filter(record => {
-                    const matchesSearch = !search || CONFIG.searchableFields.some(field =>
-                        String(record[field] ?? "").toLowerCase().includes(search)
-                    );
+            //     filteredRecords = records.filter(record => {
+            //         const matchesSearch = !search || CONFIG.searchableFields.some(field =>
+            //             String(record[field] ?? "").toLowerCase().includes(search)
+            //         );
 
-                    if (!matchesSearch) return false;
+            //         if (!matchesSearch) return false;
 
-                    return Object.entries(filters).every(([field, value]) =>
-                        !value || String(record[field] ?? "") === String(value)
-                    );
-                });
+            //         return Object.entries(filters).every(([field, value]) =>
+            //             !value || String(record[field] ?? "") === String(value)
+            //         );
+            //     });
 
-                if (sortKey) sortData();
+            //     if (sortKey) sortData();
 
-                currentPage = 1;
-                renderTable();
-            }
+            //     currentPage = 1;
+            //     renderTable();
+            // }
 
             function sortTable(key) {
                 if (sortKey === key) {
@@ -905,27 +941,12 @@ final class UIGenerator extends CPGenerator
             }
 
             async function apiRequest(action, data = {}, method = "POST") {
-                console.log("apiRequest-action", action)
-                console.log("apiRequest-data", data)
-                console.log("apiRequest-method", method)
                 const params = new URLSearchParams();
 
                 params.set("action", action);
 
                 const pk = CONFIG.primaryKey;
 
-
-                // if (
-                //     data[CONFIG.primaryKey] !== undefined &&
-                //     data[CONFIG.primaryKey] !== null &&
-                //     data[CONFIG.primaryKey] !== ""
-                // ) {
-                //     console.error("apiRequest wrong - data[pk]")
-                //     console.log("apiRequest-action", CONFIG.primaryKey)
-                //     console.log("apiRequest-data", data[pk])
-
-                //     params.set(data[CONFIG.primaryKey], data[pk]);
-                // }
                 // Primary key is handled separately because it is part of the API contract.
                 if (data[pk] !== undefined && data[pk] !== null && data[pk] !== "") {
                     params.set(CONFIG.primaryKey, data[pk]);
@@ -979,10 +1000,23 @@ final class UIGenerator extends CPGenerator
             }
             async function refreshTable() {
                 try {
-                    const json = await apiRequest("list", {
+                    let action = "list";
+
+                    const params = {
                         page: currentPage,
                         limit: pageSize
-                    }, "GET");
+                    };
+
+                    if (searchMode) {
+                        action = "search";
+                        params.q = searchQuery;
+
+                        if (searchColumn) {
+                            params.col = searchColumn;
+                        }
+                    }
+
+                    const json = await apiRequest(action, params, "GET");
 
                     records = Array.isArray(json.data) ? json.data : [];
 
@@ -1156,6 +1190,42 @@ final class UIGenerator extends CPGenerator
                 refreshTable();
             }
 
+            async function performSearch() {
+                const input = document.getElementById("searchInput");
+                const column = document.getElementById("searchColumn");
+
+                searchQuery = input.value.trim();
+                searchColumn = column ? column.value : "";
+
+                if (!searchQuery) {
+                    searchMode = false;
+                    currentPage = 1;
+                    await refreshTable();
+                    return;
+                }
+
+                searchMode = true;
+                currentPage = 1;
+
+                await refreshTable();
+            }
+
+            async function clearSearch() {
+                document.getElementById("searchInput").value = "";
+
+                const column = document.getElementById("searchColumn");
+                if (column) {
+                    column.value = "";
+                }
+
+                searchQuery = "";
+                searchColumn = "";
+                searchMode = false;
+                currentPage = 1;
+
+                await refreshTable();
+            }
+
             function exportCSV() {
                 showApiError("CSV export is not implemented by this API.");
             }
@@ -1219,13 +1289,13 @@ final class UIGenerator extends CPGenerator
                 }
             }
 
-            if (document.getElementById("searchInput")) {
-                document.getElementById("searchInput").addEventListener("input", applyFilters);
-            }
+            // if (document.getElementById("searchInput")) {
+            //     document.getElementById("searchInput").addEventListener("input", applyFilters);
+            // }
 
-            document.querySelectorAll(".schema-filter").forEach(element => {
-                element.addEventListener("change", applyFilters);
-            });
+            // document.querySelectorAll(".schema-filter").forEach(element => {
+            //     element.addEventListener("change", applyFilters);
+            // });
 
             makeColumnPicker();
             renderHeader();

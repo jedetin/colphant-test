@@ -4,8 +4,6 @@ require_once 'CPGeneratorResult.php';
 
 final class ModelGenerator extends CPGenerator
 {
-
-
     /**
      * 'bookings' → 'Bookings'  (for class name)
      * 'booking_items' → 'BookingItems'
@@ -24,12 +22,12 @@ final class ModelGenerator extends CPGenerator
         return match ($type) {
             'i', 'int', 'bigint', 'tinyint', 'smallint', 'mediumint' => 'i',
             'f', 'float', 'double', 'decimal'                         => 'd',
-            default                                                    => 's', // uuid, varchar, char
+            default                                                    => 's',
         };
     }
 
     /**
-     * Emit a PHP array literal from a flat string array, inline style.
+     * Emit a PHP flat array literal from a string array.
      * ['a', 'b', 'c']
      */
     public function phpStringArray(array $items): string
@@ -40,7 +38,22 @@ final class ModelGenerator extends CPGenerator
     }
 
     /**
-     * Emit a PHP array-of-arrays for enum field map, multi-line.
+     * Emit a PHP associative array for column → type map.
+     * ['name' => 'varchar', 'status' => 'enum', ...]
+     */
+    public function phpColumnTypesMap(array $columnTypes): string
+    {
+        if (empty($columnTypes)) return '[]';
+
+        $lines = [];
+        foreach ($columnTypes as $col => $type) {
+            $lines[] = "        '{$col}' => '{$type}'";
+        }
+        return "[\n" . implode(",\n", $lines) . "\n    ]";
+    }
+
+    /**
+     * Emit a PHP array-of-arrays for enum field map.
      * [
      *     'status' => ['pending', 'confirmed', 'cancelled'],
      * ]
@@ -51,12 +64,11 @@ final class ModelGenerator extends CPGenerator
 
         $lines = [];
         foreach ($enumFields as $col => $values) {
-            $quoted = array_map(fn($v) => "'{$v}'", $values);
+            $quoted  = array_map(fn($v) => "'{$v}'", $values);
             $lines[] = "        '{$col}' => [" . implode(', ', $quoted) . "]";
         }
         return "[\n" . implode(",\n", $lines) . "\n    ]";
     }
-
 
     public function name(): string
     {
@@ -65,13 +77,9 @@ final class ModelGenerator extends CPGenerator
 
     public function generate(): CPGeneratorResult
     {
-        $opts    = getopt('', ['spec::', 'out::']);
+        $opts     = getopt('', ['spec::', 'out::']);
         $specPath = $opts['spec'] ?? __DIR__ . '\..\spec.json';
         $outDir   = $opts['out']  ?? $_SERVER['DOCUMENT_ROOT'] . '\src\App';
-
-        // -----------------------------------------------------------------------
-        // Bootstrap
-        // -----------------------------------------------------------------------
 
         if (!file_exists($specPath)) {
             exit("[ERROR] spec.json not found at: {$specPath}\n");
@@ -86,44 +94,55 @@ final class ModelGenerator extends CPGenerator
         if (!is_dir($outDir)) {
             mkdir($outDir, 0755, true);
         }
-        // $this->log('Reading spec.json');
 
-        // $spec = $this->context->spec();
-
-        // generate model classes
         $generated = 0;
 
         foreach ($spec as $table => $def) {
 
-            $className   = $this->toClassName($table) . 'Model';
-            $primaryKey  = $def['primary_key']      ?? 'id';
-            $pkRawType   = $def['primary_key_type'] ?? 'i';
-            $pkBindChar  = $this->pkBindType($pkRawType);
-            $fields      = $def['fields']           ?? [];
+            $className  = $this->toClassName($table) . 'Model';
+            $primaryKey = $def['primary_key']      ?? 'id';
+            $pkRawType  = $def['primary_key_type'] ?? 'i';
+            $pkBindChar = $this->pkBindType($pkRawType);
+            $fields     = $def['fields']           ?? [];
 
-            // Derive field lists from spec
-            $allowedColumns = []; // filterable:true → safe for findByColumn()
-            $insertable     = []; // insertable:true → included in create()
-            $updatable      = []; // updatable:true  → included in update()
-            $enumFields     = []; // type:enum       → validated before write
+            // ---------------------------------------------------------------
+            // Single loop — derive all field lists from spec
+            // ---------------------------------------------------------------
+
+            $allowedColumns    = []; // filterable:true  → exact match via findByColumn()
+            $searchableColumns = []; // searchable:true  → LIKE or exact via search()
+            $insertable        = []; // insertable:true  → included in create()
+            $updatable         = []; // updatable:true   → included in update()
+            $enumFields        = []; // type:enum        → validated before write
+            $columnTypes       = []; // col → type       → drives search strategy
 
             foreach ($fields as $col => $meta) {
-                if (!empty($meta['filterable']))    $allowedColumns[] = $col;
-                if (!empty($meta['insertable']))    $insertable[]     = $col;
-                if (!empty($meta['updatable']))     $updatable[]      = $col;
+                if (!empty($meta['filterable']))  $allowedColumns[]    = $col;
+                if (!empty($meta['searchable']))  $searchableColumns[] = $col;
+                if (!empty($meta['insertable']))  $insertable[]        = $col;
+                if (!empty($meta['updatable']))   $updatable[]         = $col;
+
                 if (($meta['type'] ?? '') === 'enum' && !empty($meta['enum_values'])) {
                     $enumFields[$col] = $meta['enum_values'];
                 }
+
+                $columnTypes[$col] = $meta['type'] ?? 'varchar';
             }
 
-            // -----------------------------------------------------------------------
-            // Build class body
-            // -----------------------------------------------------------------------
+            // ---------------------------------------------------------------
+            // Build string representations for the class body
+            // ---------------------------------------------------------------
 
-            $allowedStr = $this->phpStringArray($allowedColumns);
-            $insertStr  = $this->phpStringArray($insertable);
-            $updatStr   = $this->phpStringArray($updatable);
-            $enumStr    = $this->phpEnumMap($enumFields);
+            $allowedStr     = $this->phpStringArray($allowedColumns);
+            $searchableStr  = $this->phpStringArray($searchableColumns);
+            $insertStr      = $this->phpStringArray($insertable);
+            $updatStr       = $this->phpStringArray($updatable);
+            $enumStr        = $this->phpEnumMap($enumFields);
+            $columnTypesStr = $this->phpColumnTypesMap($columnTypes);
+
+            // ---------------------------------------------------------------
+            // Enum validation method — only emitted if table has enum fields
+            // ---------------------------------------------------------------
 
             $enumValidateMethod = '';
             if (!empty($enumFields)) {
@@ -139,7 +158,7 @@ final class ModelGenerator extends CPGenerator
         foreach (\$this->enumFields as \$col => \$allowed) {
             if (isset(\$data[\$col]) && !in_array(\$data[\$col], \$allowed, true)) {
                 throw new \\InvalidArgumentException(
-                    "Invalid value '\${\$col}' for column '{$table}.{\$col}'. "
+                    "Invalid value for column '{$table}.{\$col}'. "
                     . "Allowed: " . implode(', ', \$allowed)
                 );
             }
@@ -149,12 +168,13 @@ final class ModelGenerator extends CPGenerator
 PHP;
             }
 
-            // Enum validation call — injected into add() and edit() if enums exist
             $enumCallCreate = !empty($enumFields) ? "\n        \$this->validateEnums(\$data);" : '';
             $enumCallUpdate = !empty($enumFields) ? "\n        \$this->validateEnums(\$data);" : '';
+            $stripComment   = "// Strip any fields the spec marks as non-insertable/non-updatable.\n        // Caller should not send them, but we enforce it here as a safety net.";
 
-            // Strip non-insertable / non-updatable keys from payload defensively
-            $stripComment = "// Strip any fields the spec marks as non-insertable/non-updatable.\n        // Caller should not send them, but we enforce it here as a safety net.";
+            // ---------------------------------------------------------------
+            // Class body
+            // ---------------------------------------------------------------
 
             $classBody = <<<PHP
 <?php
@@ -162,8 +182,8 @@ PHP;
 /**
  * {$className}
  *
- * AUTO-GENERATED by generate_models.php — do not edit directly.
- * Regenerate by running:  php generate_models.php
+ * AUTO-GENERATED by ModelGenerator — do not edit directly.
+ * Regenerate via the generator UI or CLI.
  *
  * Source table : {$table}
  * Primary key  : {$primaryKey} ({$pkBindChar})
@@ -176,10 +196,22 @@ class {$className} extends BaseModel
     protected \$primaryKeyType = '{$pkBindChar}';
 
     /**
-     * Columns safe to query via findByColumn().
+     * Columns safe for exact-match filtering via findByColumn().
      * Derived from filterable:true in spec.json.
      */
     protected \$allowedColumns = {$allowedStr};
+
+    /**
+     * Columns available for free-text search (LIKE or exact by type).
+     * Derived from searchable:true in spec.json.
+     */
+    protected \$searchableColumns = {$searchableStr};
+
+    /**
+     * Column type map — drives LIKE vs exact match strategy in search().
+     * Derived from field type in spec.json.
+     */
+    protected \$columnTypes = {$columnTypesStr};
 
     /**
      * Fields the spec permits in INSERT payloads.
@@ -190,7 +222,7 @@ class {$className} extends BaseModel
     /**
      * Fields the spec permits in UPDATE payloads.
      */
-    protected \$updatableFields  = {$updatStr};
+    protected \$updatableFields = {$updatStr};
 
     /**
      * Enum fields and their allowed values.
@@ -212,14 +244,24 @@ class {$className} extends BaseModel
         return \$this->findAll(\$limit, \$offset);
     }
 
+    public function total(): int
+    {
+        return \$this->countAll();
+    }
+
     public function getBy(string \$column, mixed \$value, ?int \$limit = null): array
     {
         return \$this->findByColumn(\$value, \$column, \$limit);
     }
 
-    public function total(): int
+    public function search(string \$term, ?string \$col = null, int \$limit = 25, int \$offset = 0): array
     {
-        return \$this->countAll();
+        return parent::search(\$term, \$col, \$limit, \$offset);
+    }
+
+    public function countSearch(string \$term, ?string \$col = null): int
+    {
+        return parent::countSearch(\$term, \$col);
     }
 
     public function add(array \$data): int
@@ -243,9 +285,9 @@ class {$className} extends BaseModel
 {$enumValidateMethod}}
 PHP;
 
-            // -----------------------------------------------------------------------
+            // ---------------------------------------------------------------
             // Write file
-            // -----------------------------------------------------------------------
+            // ---------------------------------------------------------------
 
             $outFile = "{$outDir}/{$className}.php";
             file_put_contents($outFile, $classBody);
@@ -255,7 +297,6 @@ PHP;
         }
 
         echo "\nDone. {$generated} model(s) generated.\n";
-
 
         return CPGeneratorResult::success("Generated Successfully.");
     }

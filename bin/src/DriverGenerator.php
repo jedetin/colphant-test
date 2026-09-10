@@ -346,6 +346,37 @@ PHP;
             \$action = \$_GET['action'] ?? '';
 
             switch (\$action) {
+                case 'search':
+                    requireMethod('GET');
+
+                    \$q      = trim(\$_GET['q']     ?? '');
+                    \$col    = !empty(\$_GET['col']) ? \$_GET['col'] : null;
+                    \$limit  = (int) max(1, min((int)(\$_GET['limit'] ?? 25), 100));
+                    \$page   = (int) max(1, (int)(\$_GET['page'] ?? 1));
+                    \$offset = (\$page - 1) * \$limit;
+
+                    if (strlen(\$q) < 1) {
+                        http_response_code(400);
+                        respond(false, null, "Search term is required.");
+                    }
+
+                    try {
+                        \$rows = \$model->search(\$q, \$col, \$limit, \$offset);
+                    } catch (\InvalidArgumentException \$e) {
+                        http_response_code(400);
+                        respond(false, null, \$e->getMessage());
+                    } catch (\LogicException \$e) {
+                        http_response_code(500);
+                        respond(false, null, "Search is not configured for this resource.");
+                    }
+
+                    respond(true, \$rows, null, [
+                        'q'     => \$q,
+                        'col'   => \$col ?? 'all',
+                        'page'  => \$page,
+                        'limit' => \$limit,
+                    ]);
+                    break;
 
                 // ------------------------------------------------------------------
                 case 'list':

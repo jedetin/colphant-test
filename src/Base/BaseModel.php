@@ -135,4 +135,101 @@ class BaseModel
         $stmt->close();
         return (int) $count;
     }
+
+
+    protected $allowedColumns    = [];
+    protected $searchableColumns = []; // add this — empty default, override per model
+    /**
+     * Unified search — strategy (LIKE vs exact) auto-selected by column type.
+     * $col = null searches all searchableColumns with their respective strategies.
+     *
+     * $columnTypes map must be provided by the child model:
+     *   protected $columnTypes = ['name' => 'varchar', 'status' => 'enum', ...]
+     */
+    protected function search(
+        string  $term,
+        ?string $col    = null,
+        int     $limit  = 25,
+        int     $offset = 0
+    ): array {
+        if ($col !== null) {
+            // Single column — validate then dispatch
+            if (!empty($this->searchableColumns) && !in_array($col, $this->searchableColumns, true)) {
+                throw new \InvalidArgumentException("Column '{$col}' is not searchable.");
+            }
+            [$clause, $boundValue, $type] = $this->buildSearchClause($col, $term);
+
+            $stmt = $this->database->prepare(
+                "SELECT * FROM {$this->table} WHERE {$clause} LIMIT ? OFFSET ?"
+            );
+            $stmt->bind_param($type . 'ii', $boundValue, $limit, $offset);
+        } else {
+            // Multi-column — each column uses its own strategy
+            if (empty($this->searchableColumns)) {
+                throw new \LogicException("No searchable columns defined on " . static::class);
+            }
+
+            $clauses = [];
+            $types   = '';
+            $values  = [];
+
+            foreach ($this->searchableColumns as $searchCol) {
+                [$clause, $boundValue, $type] = $this->buildSearchClause($searchCol, $term);
+                $clauses[] = $clause;
+                $types    .= $type;
+                $values[]  = $boundValue;
+            }
+
+            $whereStr = implode(' OR ', $clauses);
+            $values[] = $limit;
+            $values[] = $offset;
+
+            $stmt = $this->database->prepare(
+                "SELECT * FROM {$this->table} WHERE {$whereStr} LIMIT ? OFFSET ?"
+            );
+            $stmt->bind_param($types . 'ii', ...$values);
+        }
+
+        $stmt->execute();
+        $rows = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+        $stmt->close();
+        return $rows;
+    }
+
+    /**
+     * Returns [sql_clause, bound_value, bind_type] for a single column.
+     * Strategy is determined by the column's type in $this->columnTypes.
+     */
+    private function buildSearchClause(string $col, string $term): array
+    {
+        $fieldType = $this->columnTypes[$col] ?? 'varchar'; // default to partial if unknown
+
+        $exactTypes = [
+            'int',
+            'bigint',
+            'tinyint',
+            'smallint',
+            'mediumint',
+            'enum',
+            'date',
+            'datetime',
+            'timestamp'
+        ];
+
+        $isExact = in_array($fieldType, $exactTypes, true);
+
+        if ($isExact) {
+            $bindType   = in_array($fieldType, ['int', 'bigint', 'tinyint', 'smallint', 'mediumint'], true)
+                ? 'i' : 's';
+            $boundValue = $fieldType === 'int' ? (int)$term : $term;
+            $clause     = "`{$col}` = ?";
+        } else {
+            // varchar, text, char — partial match
+            $bindType   = 's';
+            $boundValue = '%' . $term . '%';
+            $clause     = "`{$col}` LIKE ?";
+        }
+
+        return [$clause, $boundValue, $bindType];
+    }
 }

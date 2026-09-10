@@ -11,10 +11,10 @@ include 'src/UiGenerator.php';
 $logger = new ConsoleLogger();
 
 $generators = [
-    new SpecGenerator($logger), // working 
+    // new SpecGenerator($logger), // working 
     new ModelGenerator($logger), // working 
-    new DriverGenerator($logger),
-    new UiGenerator($logger),
+    // new DriverGenerator($logger),
+    // new UiGenerator($logger),
 ];
 
 foreach ($generators as $generator) {
